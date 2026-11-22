@@ -1,0 +1,27 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE & Editor files
+.vscode/
+.idea/
+*.swp
+
+# Storage generated artifacts (keep directory structures)
+storage/raw_uploads/*
+!storage/raw_uploads/.gitkeep
+storage/chunks/*
+!storage/chunks/.gitkeep
+storage/output_hls/*
+!storage/output_hls/.gitkeep
+
+# Environment & local settings
+.env
+.DS_Store
+Thumbs.db

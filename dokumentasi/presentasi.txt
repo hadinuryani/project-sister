@@ -1,0 +1,315 @@
+================================================================================
+DOKUMEN PANDUAN PRESENTASI & DESKRIPSI VISUAL SISTEM TERDISTRIBUSI
+PRODUK: DISTRISTREAM ENGINE v1.0
+TEMA: Platform Transcoding Video Paralel & Rendering Terdistribusi Skala Besar
+MATA KULIAH: Sistem Terdistribusi (IF2228) - PSTIF Universitas Trunojoyo Madura
+DIPERUNTUKKAN UNTUK: Sumber NotebookLM (Audio Overview, Deep Dive Study Guide, & Slide Deck)
+================================================================================
+
+--------------------------------------------------------------------------------
+BAGIAN 1: RINGKASAN EKSEKUTIF & KONTEKS PROYEK (ELEVATOR PITCH)
+--------------------------------------------------------------------------------
+1.1 Identitas Proyek:
+- Nama Produk        : DistriStream Engine
+- Versi              : 1.0 (Implementasi RPC, RESTful API, & Scatter-Gather Parallel Engine)
+- Arsitektur Utama   : Multitier Hibrida Master-Worker (Master-Slave Cluster)
+- Peran Tim          : Perancang & Pengembang Sistem Terdistribusi
+- Masalah Inti       : Video transcoding (H.264/AAC) sangat rakus komputasi CPU/GPU. Pada pendekatan monolitik (single machine), video panjang menyebabkan CPU bottleneck, saturasi memori (processor-memory speed gap), dan waktu tunggu pengguna yang lambat.
+- Solusi DistriStream: Menerapkan skalabilitas horizontal. Video dipecah menjadi potongan-potongan berdurasi 5 detik (chunks), disebar secara paralel ke Worker Nodes melalui Remote Procedure Call (RPC) dengan semantik At-most-once, lalu digabungkan kembali menjadi satu berkas video utuh secara presisi.
+- 6 Pilar Kurikulum  : 
+  1. Arsitektur Multitier Master-Worker (Materi 04)
+  2. Skema Penamaan Terpadu (Structured, Flat, Attribute-Based) (Materi 05)
+  3. Antarmuka RESTful API Decoupled (Materi 06)
+  4. RPC & Semantik Eksekusi At-most-once (Materi 03)
+  5. Komputasi Paralel Pola Kolektif MPI Scatter-Gather & Amdahl's Law (Materi 09 & 10)
+  6. Strategi Caching Berjenjang & Toleransi Kegagalan Dinamis (Materi 11, 12, & 13)
+
+--------------------------------------------------------------------------------
+BAGIAN 2: STRUKTUR SLIDE PRESENTASI & DESKRIPSI VISUAL MENDALAM (SLIDE 1 - 10)
+--------------------------------------------------------------------------------
+
+================================================================================
+SLIDE 1: JUDUL & IDENTITAS SISTEM
+================================================================================
+- Judul Slide        : DistriStream Engine v1.0
+- Sub-judul          : Platform Transcoding Video Paralel & Rendering Terdistribusi Berbasis Arsitektur Multitier Master-Worker
+- Konteks Akademis   : Tugas Akhir / Product Requirement Document (PRD) Sistem Terdistribusi 2026
+- Narasi Presenter   : 
+  "Selamat pagi Bapak Dosen dan rekan-rekan sekalian. Hari ini kelompok kami mempresentasikan rancang bangun dan implementasi DistriStream Engine v1.0. Sistem ini adalah platform komputasi terdistribusi yang memecahkan masalah kelambatan konversi video beresolusi tinggi dengan mendistribusikan beban kompresi secara paralel ke kluster simpul pekerja menggunakan prinsip-prinsip utama sistem terdistribusi modern."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Latar Belakang: Dark theme bernuansa modern tech (Navy Blue / Midnight Black #0B0F19) dengan aksen Cyan Glow (#38BDF8) dan Indigo (#818CF8).
+- Bagian Tengah: Teks judul besar "DistriStream Engine" dengan tipografi modern bold sans-serif, disertai ikon visual gelombang video dan node terdistribusi yang saling terhubung.
+- Bagian Bawah: Badges teknologi tersusun rapi:
+  [Python 3] [Flask REST Gateway] [RPC Stub Middleware] [MPI-style Scatter/Gather] [FFmpeg Libx264] [At-most-once Semantics]
+- Sudut Kanan Atas: Logo universitas / identitas mata kuliah Sistem Terdistribusi PSTIF UTM.
+- Sudut Bawah Kiri: Identitas Anggota Kelompok dan NIM.
+
+================================================================================
+SLIDE 2: LATAR BELAKANG MASALAH (THE MONOLITHIC BOTTLENECK)
+================================================================================
+- Judul Slide        : Tantangan Komputasi: Mengapa Video Transcoding Harus Terdistribusi?
+- Poin Inti          :
+  1. Beban Komputasi Ekstrem: Enkoding video H.264 memerlukan transformasi diskrit kosinus, kompensasi gerak, dan kuantisasi yang menyerap utilisasi CPU hingga 100%.
+  2. Keterbatasan Skala Vertikal (Single Machine): Peningkatan CPU tunggal terbentur thermal throttling dan kesenjangan kecepatan prosesor-memori (processor-memory speed gap).
+  3. Latensi Tinggi untuk Pengguna: Video durasi 10 menit bisa memakan waktu transcoding hingga 15 menit jika diproses secara sekuensial pada satu mesin.
+- Narasi Presenter   : 
+  "Jika sebuah platform streaming memproses video hanya dengan satu mesin server besar, proses kompresi video HD akan mengunci seluruh core CPU. Akibatnya antrean menumpuk dan sistem rentan crash (*single point of failure*). Solusinya bukanlah membeli server yang lebih mahal, melainkan menerapkan prinsip skalabilitas horizontal: memecah beban pekerjaan dan membagikannya ke banyak mesin murah yang bekerja secara simultan."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Komposisi: Split-screen perbandingan (Kiri vs Kanan).
+- Sisi Kiri (Pendekatan Monolitik - Masalah):
+  * Ilustrasi 1 Server Box dengan indikator CPU terbakar/merah bertuliskan "CPU 100% OVERLOAD".
+  * Antrean video panjang macet di pintu masuk.
+  * Grafik waktu komputasi linear yang sangat lambat (T = O(N)).
+  * Label merah: "High Latency, Memory Saturation, Single Point of Failure".
+- Sisi Kanan (Pendekatan Terdistribusi - Solusi DistriStream):
+  * Ilustrasi Master Node memecah video menjadi potongan kecil (chunks).
+  * Chunks dialirkan secara paralel ke Worker 1 dan Worker 2.
+  * Grafik waktu komputasi terpangkas drastis (Speedup mendekati 2x lipat).
+  * Label hijau: "Horizontal Scalability, High Throughput, Parallel Efficiency".
+
+================================================================================
+SLIDE 3: ARSITEKTUR SISTEM (4-TIER MULTITIERED ARCHITECTURE)
+================================================================================
+- Judul Slide        : Arsitektur Sistem: Pola Multitier Master-Worker
+- Poin Inti          :
+  - Tier 1: Presentation & Web Telemetry Layer (Web UI Dashboard, real-time metrics, built-in player)
+  - Tier 2: API Gateway & Job Orchestrator Layer (Master Node - Port 5000: split, schedule, merge)
+  - Tier 3: RPC Middleware & Processing Cluster (Worker Nodes - Port 5001, 5002, dst.: FFmpeg transcoder)
+  - Tier 4: Storage & Chunk Repository Layer (Hierarki repositori raw_uploads, chunks, dan output_hls)
+- Narasi Presenter   : 
+  "Kami merancang DistriStream dengan arsitektur 4-Tier Multitier yang memisahkan tanggung jawab sistem secara tegas (separation of concerns). Klien hanya berinteraksi dengan Tier 1 dan 2 melalui REST API. Master Node bertindak sebagai otak orkestrasi yang memotong video dan mengatur antrean, sedangkan simpul pekerja di Tier 3 murni bertindak sebagai kuli komputasi yang mengeksekusi konversi tanpa perlu tahu siapa klien aslinya."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Diagram Blok Arsitektur Bertingkat Vertikal (dari atas ke bawah):
+  1. Box Tier 1 (Paling Atas - Presentation): Ikon Laptop Klien & Browser Dashboard dengan panah HTTP request.
+  2. Box Tier 2 (API Gateway & Master Node): Memuat 3 sub-komponen kotak:
+     [ REST API Controller ] <-> [ Video Segmenter / Splitter ] <-> [ Master Scheduler / Load Balancer ]
+  3. Panah Jaringan Dua Arah (RPC over TCP): Menghubungkan Master ke Tier 3 dengan label "RPC Protocol (At-most-once)".
+  4. Box Tier 3 (Processing Cluster): Terdiri dari 2 atau lebih Worker Nodes paralel:
+     [ Worker Node 1 (Port 5001) : Transcoder Engine ] 
+     [ Worker Node 2 (Port 5002) : Transcoder Engine ]
+  5. Box Tier 4 (Storage Layer): Repositori berkas bersama yang menyimpan folder raw_uploads/, chunks/, dan output_hls/.
+
+================================================================================
+SLIDE 4: SKEMA PENAMAAN TERDISTRIBUSI (NAMING SYSTEM)
+================================================================================
+- Judul Slide        : Tiga Skema Penamaan (Materi 05 Penamaan)
+- Poin Inti          :
+  1. Structured Naming (Hierarkis): URI REST API (`/api/v1/videos/{video_id}`) dan RPC method (`/rpc/transcode`).
+  2. Flat Naming (Deterministik): Identifikasi unik video (Hex UUID) dan canonical chunk key (`{video_id}/chunk_{seq_num:03d}_{res}.mp4`).
+  3. Attribute-Based Naming: Discovery kapabilitas pekerja via Heartbeat `/health` (tuple: `codec=H.264`, `gpu_accel=False`, `max_concurrent=2`).
+- Narasi Presenter   : 
+  "Sistem kami menggabungkan tiga pilar penamaan terdistribusi. Structured naming digunakan untuk memudahkan navigasi hierarki sumber daya melalui URL. Flat naming digunakan untuk menjamin bahwa jutaan potongan video di repositori memiliki identitas unik yang bebas tabrakan nama (*no name collision*). Terakhir, attribute-based naming memungkinkan Master mendeteksi kemampuan hardware worker secara dinamis sehingga pembagian tugas dapat disesuaikan secara proporsional."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Tiga Kolom Visual Bersebelahan:
+  * Kolom 1 (Structured Naming): Bagan Pohon Hierarkis (Directory Tree) yang menggambarkan rute URI: `/api` -> `/v1` -> `/videos` -> `{video_id}` -> `/stream`.
+  * Kolom 2 (Flat Naming): Ilustrasi formula hashing dan format kanonikal: Kotak input video -> Hashing -> Hash Key `1fe5dfd3` -> Partisi Chunk Key `chunk_000_720p.mp4`, `chunk_001_720p.mp4`.
+  * Kolom 3 (Attribute-Based Naming): Kartu Profil Hardware Worker (seperti KTP digital simpul):
+    Badge ID: Worker-1 | IP: 127.0.0.1:5001
+    - Atribut: Codec = "H.264/AAC"
+    - Atribut: GPU = False
+    - Atribut: Threads = 2
+
+================================================================================
+SLIDE 5: ANTARMUKA RESTFUL API & WEB DASHBOARD
+================================================================================
+- Judul Slide        : RESTful API Decoupled & Live Telemetry Dashboard
+- Poin Inti          :
+  - Titik Masuk Terstandar (HTTP Methods): POST (Upload & Start Job), GET (Status & Telemetri), GET (Stream MP4 dengan HTTP Range Requests), DELETE (Batal & Bersihkan Chunk Temporer).
+  - Dashboard Web Interaktif: Antarmuka real-time yang memvisualisasikan status seluruh worker, progress bar multi-chunk, log aktivitas siaran, dan streaming video langsung.
+- Narasi Presenter   : 
+  "Kami mengimplementasikan RESTful API yang stateless dan decoupled. Klien mengunggah video melalui `POST /api/v1/videos/upload` dan langsung menerima respon `202 Accepted` bersama ID pekerjaan. Klien kemudian dapat memantau proses secara asinkron tanpa mengunci koneksi. Kami juga melengkapinya dengan web dashboard interaktif sehingga status kluster dan log aktivitas antar-simpul dapat diawasi secara transparan."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Sisi Kiri: Mockup antarmuka Dashboard Web DistriStream:
+  * Kartu status Worker (Worker-1: Online hijau, Worker-2: Online hijau).
+  * Area drag-and-drop video upload dan pemilih resolusi (720p, 480p, 360p).
+  * Real-time progress bar persentase penyelesaian chunk.
+  * Konsol log hitam bergaya terminal yang menampilkan log pertukaran pesan kluster.
+  * HTML5 Video Player bawaan yang memutar video hasil konversi.
+- Sisi Kanan: Tabel Rute RESTful API bersih:
+  [POST]   /api/v1/videos/upload       -> Inisiasi tugas transcoding
+  [GET]    /api/v1/videos/{video_id}   -> Polling status progres
+  [GET]    /api/v1/videos/{id}/stream  -> Streaming berkas MP4
+  [GET]    /api/v1/workers             -> Daftar & kesehatan simpul
+  [DELETE] /api/v1/videos/{video_id}   -> Pembatalan & garbage collector
+
+================================================================================
+SLIDE 6: SPESIFIKASI RPC & 10 LANGKAH EKSEKUSI STUB
+================================================================================
+- Judul Slide        : Remote Procedure Call (RPC): Transparansi Akses & 10 Alur Stub
+- Poin Inti          :
+  - Transparansi Akses (*Access Transparency*): Master Scheduler memanggil fungsi pemrosesan di worker layaknya pemanggilan fungsi lokal biasa.
+  - Pemisahan Ruang Alamat (*Address Space Separation*): Master dan Worker berjalan pada proses dan memori berbeda; parameter dikirimkan melalui *Pass-by-Copying*.
+  - 10 Langkah Siklus Hidup RPC: Dari Client Call, Marshalling ke format JSON bitstream, transmisi TCP, Server Stub Unmarshalling, Local Execution (FFmpeg), hingga pengembalian hasil ke klien.
+- Narasi Presenter   : 
+  "Komunikasi antara Master dan Worker tidak menggunakan panggilan fungsi langsung karena keduanya memiliki ruang alamat memori yang terisolasi. Kami membangun lapisan middleware RPC dengan Client Stub pada Master dan Server Stub pada Worker. Melalui 10 tahapan baku RPC, parameter fungsi dikemas secara otomatis, dikirim lewat jaringan TCP, dieksekusi secara lokal oleh worker, dan hasilnya dikembalikan secara transparan ke Master."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Diagram Sekuens Pertukaran Pesan (10 Tahapan Bernomor):
+  [Master Process]                     [Jaringan TCP]                    [Worker Process]
+  1. Client Call -------->                                         
+  2. Marshalling --------> 3. Transmission -------> 4. Delivery -> 5. Unmarshalling
+                                                                   6. Local Call
+                                                                   7. FFmpeg Execution
+  10. Unpack & Return <-- 9. Ret Transmission <--- 8. Marshalling <--- Hasil Durasi/Path
+- Kotak Keterangan Bawah:
+  "Passing Parameter: Call-by-Value untuk skalar (resolusi/seq_num) & Pass-by-Copying untuk metadata berkas."
+
+================================================================================
+SLIDE 7: PENANGANAN KEGAGALAN & SEMANTIK RPC AT-MOST-ONCE
+================================================================================
+- Judul Slide        : Toleransi Kesalahan: Mengapa Wajib Semantik At-Most-Once?
+- Poin Inti          :
+  - Masalah di Jaringan: Timeout, packet loss balasan, atau kelambatan respon dapat memicu klien mengirim ulang (*retransmit*).
+  - Bahaya At-least-once: Jika retransmit dieksekusi berkali-kali pada proses encoding video, utilisasi CPU akan terbuang sia-sia dan file output bisa corrupt.
+  - Solusi At-most-once pada DistriStream: Worker mengelola tabel penapisan duplikasi (`PROCESSED_REQUESTS`) berdasarkan kunci unik `{task_id}_{seq_num}`. Jika duplikat diterima, worker tidak merender ulang, melainkan langsung mengirimkan kembali hasil yang tersimpan di cache (*retransmit cached reply*).
+- Narasi Presenter   : 
+  "Di sistem terdistribusi, kita tidak bisa mengasumsikan jaringan selalu sempurna. Jika terjadi timeout, Master Client Stub akan melakukan retransmit hingga 2 kali. Agar worker tidak merender ulang potongan video yang sama, worker menerapkan semantik At-most-once. Worker mencatat riwayat pekerjaan yang pernah selesai. Saat permintaan kedua dengan nomor sekuens yang sama masuk, worker cukup mengambil hasil dari memori cache tanpa membebani prosesor lagi."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Diagram Alir Logika Duplicate Filtering (Decision Tree):
+  Permintaan RPC Masuk -> [Cek: Apakah task_id + seq_num ada di PROCESSED_REQUESTS?]
+    |--> JIKA YA (Duplikat Terdeteksi): Ambil hasil dari memori -> Langsung Return Cached Response (0 detik) -> [CPU AMAN]
+    |--> JIKA TIDAK: Eksekusi FFmpeg Transcoder -> Simpan hasil di Memory -> Return Hasil Baru
+- Tabel Ringkas Perbandingan Semantik:
+  * At-least-once : Retransmit Ya, Duplicate Filter Tidak Ada (Hanya aman untuk operasi Idempotent).
+  * At-most-once  : Retransmit Ya, Duplicate Filter ADA (Wajib untuk Transcoding Video).
+  * Exactly-once  : Ideal namun membutuhkan overhead transaksi 2PC yang berat.
+
+================================================================================
+SLIDE 8: KOMPUTASI PARALEL POLA MPI (SCATTER-GATHER) & HUKUM AMDAHL
+================================================================================
+- Judul Slide        : Komputasi Paralel: Pola MPI Scatter-Gather & Amdahl's Law
+- Poin Inti          :
+  - Analogi MPI: Master bertindak sebagai Koordinator (Rank 0) dan Worker sebagai simpul komputasi (Rank 1..N).
+  - MPI_Scatter: Master memotong video masukan menjadi potongan 5 detik lalu menyebarkannya secara Round-Robin ke antrean worker.
+  - Non-blocking I/O: Menggunakan `ThreadPoolExecutor` asinkron (mengemulasikan sifat non-blocking `MPI_Isend` dan `MPI_Irecv`).
+  - MPI_Gather: Master mengumpulkan seluruh potongan yang telah selesai, menyusun indeks urutan waktu, dan menyatukannya via FFmpeg concat filter.
+  - Analisis Hukum Amdahl:
+    $$S_p = \frac{1}{(1 - P) + \frac{P}{N}}$$
+    Dengan fraksi paralel P = 85% dan sekuensial 15%, 2 worker menghasilkan batas percepatan teoritis $S_2 = 1.74\times$.
+- Narasi Presenter   : 
+  "Kami mengadopsi pola komunikasi kolektif standar MPI. Master mengeksekusi operasi Scatter dengan memotong video menjadi segmen seragam lalu membagikannya ke para pekerja. Eksekusi berjalan secara non-blocking sehingga Master dapat terus menyiarkan tugas tanpa terkunci. Setelah semua potongan selesai, Master mengeksekusi operasi Gather untuk menggabungkan video. Berdasarkan analisis Hukum Amdahl, penggunaan dua simpul pekerja memberikan percepatan teoritis hingga 1,74 kali lebih cepat dibanding pemrosesan sekuensial."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Sisi Kiri (Diagram Alur Scatter-Gather):
+  * Input Video Utuh (15 detik).
+  * Panah [MPI_Scatter]: Terbelah menjadi Chunk 0 (0-5s), Chunk 1 (5-10s), Chunk 2 (10-15s).
+  * Chunk 0 & 2 dialirkan ke Worker-1; Chunk 1 dialirkan ke Worker-2 (Paralel Encoding).
+  * Panah [MPI_Gather]: Seluruh potongan dikembalikan ke Master dan disambung menjadi Video Final 720p.
+- Sisi Kanan (Grafik Hukum Amdahl):
+  * Kurva Speedup $S_p$ terhadap jumlah node $N$.
+  * Garis horizontal batas fraksi sekuensial (1-P = 15%).
+  * Titik penanda: N=1 (Speedup 1x), N=2 (Speedup 1.74x), N=4 (Speedup 2.76x).
+
+================================================================================
+SLIDE 9: CACHING, KONSISTENSI, & TOLERANSI KEGAGALAN (FAILOVER)
+================================================================================
+- Judul Slide        : Caching Berjenjang & Dynamic Failover
+- Poin Inti          :
+  - Hierarki Caching 3 Tingkat:
+    1. Edge/Browser Cache (Cache-Control HTTP header untuk file MP4 statis)
+    2. Master In-Memory Job Cache (`JOBS` dictionary untuk polling status berlatensi < 10 ms)
+    3. Worker Result Cache (Idempotency table untukAt-most-once)
+  - Kebijakan Penggantian LRU: Membersihkan potongan video lama saat kuota disk menipis (memenuhi Stack Property).
+  - Kebijakan Konsistensi Lease: Berkas chunk sementara diberi masa sewa 2 jam, setelah itu dihapus otomatis oleh garbage collector.
+  - Dynamic Task Reassignment (Failover): Jika Worker 1 mengalami crash di tengah pemrosesan chunk, Master mendeteksi kegagalan tersebut dan secara otomatis memindahkan chunk tersebut ke Worker 2 yang sehat.
+- Narasi Presenter   : 
+  "Untuk menjaga kinerja tetap optimal dan ruang disk tidak penuh, kami menerapkan caching berjenjang dengan kebijakan penggantian Least Recently Used (LRU) serta pemberian hak sewa (lease) pada berkas potongan temporer. Selain itu, kami menerapkan sistem Toleransi Kegagalan dinamis: jika salah satu worker mendadak mati di tengah komputasi, Master secara cerdas mengalihkan tugas yang gagal ke worker lain yang masih hidup sehingga video pengguna tetap selesai tanpa error."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Diagram 2 Bagian:
+  * Bagian Atas (Piramida Caching 3 Tingkat):
+    [ Client / Browser Cache ]  -> Paling Cepat
+    [ Master In-Memory Cache ]  -> Status & Telemetri
+    [ Storage LRU Chunk Cache] -> Repositori Berkas Disk
+  * Bagian Bawah (Skenario Dynamic Failover):
+    Master mengirim Chunk 1 ke Worker 1 -> Worker 1 mengalami CRASH (Simbol X Merah) -> Master Timeout -> Master mendeteksi failover -> Master mengirim ulang Chunk 1 ke Worker 2 -> Worker 2 sukses merender (Simbol Centang Hijau).
+
+================================================================================
+SLIDE 10: HASIL PENGUJIAN & KESIMPULAN
+================================================================================
+- Judul Slide        : Evaluasi Kinerja, Demo Sistem, & Kesimpulan
+- Poin Inti          :
+  - Hasil Uji Benchmark (Video Sampel 15 Detik):
+    * 1 Worker (Sekuensial): ~18.4 detik
+    * 2 Worker (DistriStream Paralel): ~11.2 detik (Percepatan 1.64x, mendekati batas teoritis Amdahl 1.74x)
+  - Pemenuhan Kebutuhan: Seluruh matriks FR-01 s/d FR-06 dan NFR-01 s/d NFR-04 terpenuhi sempurna.
+  - Kesimpulan: DistriStream Engine membuktikan bahwa arsitektur terdistribusi Master-Worker yang memadukan RPC At-most-once dan MPI Scatter-Gather berhasil mengatasi hambatan pemrosesan multimedia skala besar secara efisien dan tangguh.
+- Narasi Presenter   : 
+  "Sebagai penutup, pengujian empiris kami membuktikan bahwa DistriStream Engine memangkas waktu pemrosesan video dari 18 detik menjadi 11 detik dengan hanya menambahkan 2 simpul pekerja. Sistem ini berhasil membuktikan keunggulan arsitektur sistem terdistribusi dalam memecahkan masalah nyata. Sekarang, mari kita saksikan demo langsung sistem di dashboard. Terima kasih, kami siap menerima pertanyaan dan masukan dari Bapak Dosen."
+
+[DESKRIPSI VISUAL & TATA LETAK SLIDE]:
+- Sisi Kiri (Bar Chart Perbandingan Kecepatan):
+  * Batang Merah: Single Node (18.4 detik)
+  * Batang Hijau: DistriStream 2 Worker (11.2 detik) -> Disertai badge "39% Faster / Speedup 1.64x"
+- Sisi Kanan: Checklist Pemenuhan Kriteria Sistem Terdistribusi (Semua Bercentang Hijau):
+  [✓] Multitier Master-Worker Architecture
+  [✓] Structured & Flat & Attribute-Based Naming
+  [✓] RESTful API with Decoupled Gateway
+  [✓] RPC Middleware with At-most-once Semantics
+  [✓] MPI-style Scatter-Gather Parallelism
+  [✓] Dynamic Fault Tolerance & Task Reassignment
+- Bagian Bawah: Ajakan Demo Langsung (Call-to-Action) bertuliskan:
+  "DEMO SESI KLUSTER: Akses Dashboard di http://localhost:5000"
+
+--------------------------------------------------------------------------------
+BAGIAN 3: DIALOG SIMULASI AUDIO OVERVIEW (DEEP DIVE DISCUSSION UNTUK NOTEBOOKLM)
+--------------------------------------------------------------------------------
+Catatan untuk NotebookLM Audio Overview:
+Format transkrip dialog berikut dirancang agar fitur "Deep Dive / Audio Overview" di NotebookLM dapat membawakan podcast dua pembicara (Host 1 & Host 2) yang membedah proyek DistriStream Engine secara cerdas, santai namun berbobot teknis tinggi.
+
+[Host 1]: "Halo semuanya! Di episode Deep Dive kali ini kita membedah sebuah proyek sistem terdistribusi yang sangat keren dari mahasiswa Teknik Informatika UTM, namanya DistriStream Engine v1.0. Pernah nggak kamu mengunggah video ke YouTube dan bertanya-tanya, kenapa sih video 4K bisa cepat banget diproses dalam berbagai resolusi? Nah, proyek ini menjawab persis masalah itu."
+
+[Host 2]: "Tepat sekali! Dan yang menarik, mereka nggak cuma sekadar bikin aplikasi web konversi video biasa. Yang dibangun di sini adalah miniatur dari arsitektur platform raksasa seperti Netflix atau YouTube, di mana video dipecah dan diproses secara paralel di banyak mesin terpisah."
+
+[Host 1]: "Bicara soal arsitektur, apa sih yang menjadi pilar terpenting dari DistriStream ini?"
+
+[Host 2]: "Ada beberapa hal penting. Pertama, arsitekturnya mengadopsi 4-Tier Master-Worker. Jadi ada Master Node yang berfungsi sebagai koordinator tunggal dan API Gateway, lalu ada Worker Nodes yang menjadi kuli transcoding. Yang keren, komunikasinya menggunakan Remote Procedure Call atau RPC, bukan sekadar REST biasa antar-layanan internal."
+
+[Host 1]: "Tunggu, kenapa mereka memilih RPC untuk komunikasi internal Master ke Worker?"
+
+[Host 2]: "Karena RPC memberikan yang namanya 'Access Transparency'. Pemrogram di Master Node bisa memanggil fungsi di Worker Node seolah-olah fungsi lokal biasa. Tapi di balik layar, Client Stub di Master membungkus parameter fungsi, mengirimkannya lewat jaringan TCP, lalu Server Stub di Worker membongkarnya dan mengeksekusi FFmpeg. Dan yang paling krusial adalah semantiknya: mereka menerapkan semantik 'At-most-once'!"
+
+[Host 1]: "Ah, semantik At-most-once! Kenapa itu penting banget untuk video transcoding?"
+
+[Host 2]: "Bayangkan begini: transcoding video itu proses yang sangat rakus CPU, bisa memakan 100% daya prosesor selama beberapa detik atau menit. Kalau koneksi jaringan tersendat dan Master mengira pesan hilang, Master akan mengirim ulang permintaan tersebut. Kalau memakai semantik 'At-least-once', worker kedua atau ketiga akan ikut merender video yang sama dari nol! Itu pemborosan daya yang luar biasa."
+
+[Host 1]: "Benar sekali! Jadi dengan At-most-once, worker punya tabel penapisan duplikasi ya?"
+
+[Host 2]: "Tepat! Worker menyimpan riwayat request di memori dengan kunci task_id dan sequence number. Kalau ada permintaan kedua yang sama masuk, worker langsung bilang: 'Eh, tugas ini sudah selesai, ini hasil yang ada di cache!' Jadi prosesor nggak perlu kerja dua kali. Sangat efisien!"
+
+[Host 1]: "Lalu bagaimana dengan komputasi paralelnya? Di dokumen mereka menyebut pola kolektif MPI Scatter-Gather."
+
+[Host 2]: "Iya! Master memecah video menjadi potongan kecil berdurasi 5 detik. Proses pemotongan dan pembagian potongan ke para worker ini mengemulasikan operasi 'MPI_Scatter'. Lalu seluruh worker memproses potongan itu secara bersamaan. Dan saat semua potongan selesai di-transcode ke resolusi tujuan—misalnya 720p—Master mengumpulkan kembali seluruh potongan tersebut, yang merupakan operasi 'MPI_Gather', lalu menyatukannya menjadi video utuh. Berdasarkan analisis Hukum Amdahl mereka, penambahan 2 worker memangkas waktu kerja dari 18 detik menjadi hanya 11 detik!"
+
+[Host 1]: "Dan bagaimana jika salah satu worker tiba-tiba mati atau laptopnya tercabut kabel jaringannya di tengah jalan?"
+
+[Host 2]: "Nah, ini bagian favorit saya: Toleransi Kegagalan Dinamis atau Dynamic Failover. Jika Master mendeteksi ada worker yang crash saat memproses suatu potongan video, Master tidak menggagalkan seluruh video pengguna. Master akan secara otomatis mengalihkan potongan yang gagal itu ke worker lain yang masih sehat. Jadi video tetap selesai dengan mulus."
+
+[Host 1]: "Luar biasa! Jadi kesimpulannya, DistriStream Engine ini bukan sekadar tugas kuliah biasa, tapi implementasi menyeluruh dari teori arsitektur, penamaan, RPC, pemrosesan paralel MPI, caching, hingga fault tolerance. Sangat layak diacungi jempol untuk presentasi tugas akhir!"
+
+--------------------------------------------------------------------------------
+BAGIAN 4: GLOSARIUM TEKNIS & CONTEKAN TANYA-JAWAB DOSEN (FAQ)
+--------------------------------------------------------------------------------
+
+Q1: Mengapa sistem ini disebut sistem terdistribusi, bukan sekadar multiprocessing di satu komputer?
+A1: Karena komponen-komponennya berjalan pada proses terpisah, mendengarkan port jaringan TCP yang independen (5000, 5001, 5002), memiliki ruang alamat memori (address space) yang terisolasi secara fisik, dan berkomunikasi murni melalui pertukaran pesan jaringan (network message passing) menggunakan protokol RPC dan RESTful API. Sistem ini dapat dipindahkan ke beberapa komputer fisik berbeda di jaringan lokal tanpa mengubah arsitektur kode.
+
+Q2: Mengapa menggunakan format potongan (chunk) berdurasi 5 detik?
+A2: Durasi 5 detik adalah titik temu optimal (trade-off) antara latensi I/O pemotongan berkas dengan paralelisme. Jika potongan terlalu kecil (misal 1 detik), overhead transmisi jaringan dan pemotongan menjadi dominan. Jika terlalu besar (misal 30 detik), peluang pembagian beban secara paralel menjadi tidak seimbang (load imbalance).
+
+Q3: Bagaimana cara sistem menjamin integritas audio dan video saat digabungkan kembali?
+A3: Sistem menggunakan flag `-reset_timestamps 1` saat pemotongan awal dan menggunakan demuxer concatenation FFmpeg (`concat` filter) saat tahap Gather. Penamaan kanonikal yang menyertakan nomor sekuens berurutan (`chunk_000`, `chunk_001`, ...) menjamin seluruh frame video dan sampel audio tersusun pada urutan waktu aslinya tanpa distorsi atau jeda sinkronisasi.
+
+Q4: Mengapa memilih arsitektur Master-Worker dibanding Peer-to-Peer murni?
+A4: Karena tugas video transcoding membutuhkan orkestrasi deterministik: ada urutan pemotongan, penugasan beban kerja, pemantauan status, dan penggabungan akhir. Pola Master-Worker (koordinator terpusat) menjamin konsistensi perakitan video dan efisiensi penjadwalan tanpa beban koordinasi konsensus P2P yang berlebih.
+
+================================================================================
+AKHIR DOKUMEN PRESENTASI & PANDUAN VISUAL NOTEBOOKLM
+================================================================================
+

@@ -1,0 +1,4 @@
+# DistriStream Engine v1.0 Dependencies
+flask>=3.0.0
+requests>=2.31.0
+imageio-ffmpeg>=0.5.1
