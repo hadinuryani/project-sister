@@ -13,7 +13,7 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from common.config import get_local_ip
+from common.config import ensure_firewall_allowed, get_local_ip
 from worker.transcoder import transcode_video_chunk
 
 app = Flask(__name__)
@@ -152,6 +152,8 @@ def keep_registered_to_master(master_url: str, worker_id: str, port: int):
 
 def main():
     global WORKER_ID, WORKER_PORT
+
+    ensure_firewall_allowed(ports=(5000, 5001))
 
     parser = argparse.ArgumentParser(description="DistriStream Transcoding Worker Node")
     parser.add_argument("--id", type=str, default=None, help="Symbolic Worker ID (e.g. Worker-1, Laptop-Teman)")

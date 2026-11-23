@@ -12,7 +12,14 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from common.config import CHUNKS_DIR, MASTER_REST_PORT, OUTPUT_DIR, RAW_DIR, get_local_ip
+from common.config import (
+    CHUNKS_DIR,
+    MASTER_REST_PORT,
+    OUTPUT_DIR,
+    RAW_DIR,
+    ensure_firewall_allowed,
+    get_local_ip,
+)
 from master.scheduler import MasterScheduler
 from master.segmenter import split_video_into_chunks
 
@@ -1163,6 +1170,7 @@ def delete_video_job(video_id: str):
 
 
 if __name__ == "__main__":
+    ensure_firewall_allowed(ports=(5000, 5001))
     lan_ip = get_local_ip()
     print("=" * 65)
     print("  DistriStream Master Node (API Gateway & Scheduler)")

@@ -65,3 +65,27 @@ def get_ffmpeg_binary() -> Optional[str]:
         pass
 
     return None
+
+
+def ensure_firewall_allowed(ports=(5000, 5001)) -> bool:
+    """Otomatis memeriksa dan mendaftarkan port ke Windows Firewall melalui kode Python."""
+    if os.name != "nt":
+        return True
+
+    try:
+        check = subprocess.run(
+            ["netsh", "advfirewall", "firewall", "show", "rule", "name=DistriStream Engine"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        if check.returncode == 0:
+            return True
+
+        import ctypes
+        port_list = ",".join(str(p) for p in ports)
+        command = f'netsh advfirewall firewall add rule name="DistriStream Engine" dir=in action=allow protocol=TCP localport={port_list}'
+        result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f"/c {command}", None, 0)
+        return result > 32
+    except Exception:
+        return False
