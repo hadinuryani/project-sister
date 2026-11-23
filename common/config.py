@@ -83,8 +83,7 @@ def ensure_firewall_allowed(ports=(5000, 5001)) -> bool:
             return True
 
         import ctypes
-        port_list = ",".join(str(p) for p in ports)
-        command = f'netsh advfirewall firewall add rule name="DistriStream Engine" dir=in action=allow protocol=TCP localport={port_list}'
+        command = 'netsh advfirewall firewall add rule name="DistriStream Engine" dir=in action=allow protocol=TCP localport=5000-5010'
         result = ctypes.windll.shell32.ShellExecuteW(None, "runas", "cmd.exe", f"/c {command}", None, 0)
         return result > 32
     except Exception:

@@ -27,6 +27,7 @@ app = Flask(__name__)
 scheduler = MasterScheduler()
 
 JOBS: Dict[str, Any] = {}
+ACTIVE_JOB_ID: Optional[str] = None
 SYSTEM_LOGS: List[Dict[str, str]] = [
     {
         "time": time.strftime("%H:%M:%S"),
@@ -864,58 +865,42 @@ HTML_DASHBOARD = """<!DOCTYPE html>
         setInterval(refreshWorkers, 4000);
         setInterval(fetchLogs, 1500);
 
-        // Upload Form handler
-        document.getElementById('uploadForm').onsubmit = async (event) => {
-            event.preventDefault();
-            const fileInput = document.getElementById('videoFile');
-            const submitBtn = document.getElementById('btnLaunch');
+        // Global Realtime Synchronizer for all connected laptops (Master & Workers)
+        let activeJobId = null;
 
-            if (!fileInput.files[0]) return;
-
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<span>⏳</span> Memproses di Kluster...';
-
-            const pipelineCard = document.getElementById('pipelineStatus');
-            const progressFill = document.getElementById('progressFill');
-            const progressPercent = document.getElementById('progressPercent');
-            const phaseText = document.getElementById('pipelinePhaseText');
-            pipelineCard.style.display = 'block';
-
-            const formData = new FormData();
-            formData.append('video', fileInput.files[0]);
-            formData.append('resolution', selectedResolution);
-
+        async function syncGlobalJobState() {
             try {
-                const response = await fetch('/api/v1/videos/upload', {
-                    method: 'POST',
-                    body: formData,
-                });
-                const result = await response.json();
+                const response = await fetch('/api/v1/jobs/active');
+                const data = await response.json();
+                if (!data.has_job) return;
 
-                if (!result.success) {
-                    alert('Gagal: ' + result.error);
-                    submitBtn.disabled = false;
-                    submitBtn.innerHTML = '<span>⚡</span> Mulai Transcoding Paralel';
-                    return;
-                }
+                const job = data.job;
+                const videoId = job.video_id;
+                activeJobId = videoId;
 
-                const videoId = result.video_id;
-                phaseText.innerText = `Segmentasi selesai (${result.chunks_count} chunks). Menyebarkan via MPI...`;
+                const pipelineCard = document.getElementById('pipelineStatus');
+                const progressFill = document.getElementById('progressFill');
+                const progressPercent = document.getElementById('progressPercent');
+                const phaseText = document.getElementById('pipelinePhaseText');
+                const submitBtn = document.getElementById('btnLaunch');
+                const showcase = document.getElementById('showcaseCard');
 
-                const poller = setInterval(async () => {
-                    const statusResponse = await fetch('/api/v1/videos/' + videoId);
-                    const statusData = await statusResponse.json();
+                if (job.status === 'PROCESSING') {
+                    pipelineCard.style.display = 'block';
+                    progressFill.style.width = job.progress + '%';
+                    progressPercent.innerText = job.progress + '%';
+                    phaseText.innerText = job.status_text || `Parallel Encoding: ${job.progress}% selesai...`;
+                    if (submitBtn) {
+                        submitBtn.disabled = true;
+                        submitBtn.innerHTML = '<span>⏳</span> Memproses di Kluster...';
+                    }
 
-                    progressFill.style.width = statusData.progress + '%';
-                    progressPercent.innerText = statusData.progress + '%';
-                    phaseText.innerText = statusData.status;
-
-                    if (statusData.chunks && statusData.chunks.length > 0) {
+                    if (job.chunks && job.chunks.length > 0) {
                         const badgeEl = document.getElementById('chunksCountBadge');
-                        if (badgeEl) badgeEl.innerText = `${statusData.chunks.length} Segmen (5s/chunk)`;
+                        if (badgeEl) badgeEl.innerText = `${job.chunks.length} Segmen (5s/chunk)`;
                         const chunksGrid = document.getElementById('chunksGrid');
                         if (chunksGrid) {
-                            chunksGrid.innerHTML = statusData.chunks.map(chunk => {
+                            chunksGrid.innerHTML = job.chunks.map(chunk => {
                                 let badgeBg = 'var(--yellow-main)';
                                 let badgeText = '⏳ MENUNGGU';
                                 if (chunk.status === 'DISPATCHED') {
@@ -944,32 +929,77 @@ HTML_DASHBOARD = """<!DOCTYPE html>
                             }).join('');
                         }
                     }
+                } else if (job.status === 'COMPLETED') {
+                    pipelineCard.style.display = 'block';
+                    progressFill.style.width = '100%';
+                    progressPercent.innerText = '100%';
+                    phaseText.innerText = 'Transcoding Kluster Selesai!';
 
-                    if (statusData.status === 'COMPLETED') {
-                        clearInterval(poller);
-                        submitBtn.disabled = false;
-                        submitBtn.innerHTML = '<span>⚡</span> Mulai Transcoding Paralel';
-
-                        const showcase = document.getElementById('showcaseCard');
-                        showcase.style.display = 'block';
-                        document.getElementById('metricRes').innerText = statusData.resolution;
-                        document.getElementById('metricTime').innerText = (statusData.total_time_ms / 1000).toFixed(2) + 's';
-                        document.getElementById('metricWorkers').innerText = statusData.workers_used + ' Nodes';
-                        document.getElementById('metricChunks').innerText = statusData.chunks_count + ' Segmen';
-
-                        const streamUrl = '/api/v1/videos/' + videoId + '/stream';
-                        document.getElementById('videoPlayer').src = streamUrl;
-                        document.getElementById('btnDownload').href = streamUrl;
-
-                        showcase.scrollIntoView({ behavior: 'smooth' });
-                    } else if (statusData.status === 'FAILED') {
-                        clearInterval(poller);
-                        alert('Transcoding Gagal: ' + statusData.error);
+                    if (submitBtn) {
                         submitBtn.disabled = false;
                         submitBtn.innerHTML = '<span>⚡</span> Mulai Transcoding Paralel';
                     }
-                }, 1000);
 
+                    showcase.style.display = 'block';
+                    document.getElementById('metricRes').innerText = job.resolution || '720p';
+                    document.getElementById('metricTime').innerText = ((job.total_time_ms || 0) / 1000).toFixed(2) + 's';
+                    document.getElementById('metricWorkers').innerText = (job.workers_used || 1) + ' Nodes';
+                    document.getElementById('metricChunks').innerText = (job.chunks_count || job.chunks?.length || 0) + ' Segmen';
+
+                    const streamUrl = '/api/v1/videos/' + videoId + '/stream';
+                    const videoPlayer = document.getElementById('videoPlayer');
+                    if (videoPlayer.dataset.loadedVideo !== videoId) {
+                        videoPlayer.src = streamUrl;
+                        videoPlayer.dataset.loadedVideo = videoId;
+                        document.getElementById('btnDownload').href = streamUrl;
+                    }
+                } else if (job.status === 'FAILED') {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.innerHTML = '<span>⚡</span> Mulai Transcoding Paralel';
+                    }
+                }
+            } catch (err) {
+                console.error('syncGlobalJobState error:', err);
+            }
+        }
+
+        setInterval(syncGlobalJobState, 1000);
+        syncGlobalJobState();
+
+        // Upload Form handler
+        document.getElementById('uploadForm').onsubmit = async (event) => {
+            event.preventDefault();
+            const fileInput = document.getElementById('videoFile');
+            const submitBtn = document.getElementById('btnLaunch');
+
+            if (!fileInput.files[0]) return;
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<span>⏳</span> Memproses di Kluster...';
+
+            const pipelineCard = document.getElementById('pipelineStatus');
+            pipelineCard.style.display = 'block';
+
+            const formData = new FormData();
+            formData.append('video', fileInput.files[0]);
+            formData.append('resolution', selectedResolution);
+
+            try {
+                const response = await fetch('/api/v1/videos/upload', {
+                    method: 'POST',
+                    body: formData,
+                });
+                const result = await response.json();
+
+                if (!result.success) {
+                    alert('Gagal: ' + result.error);
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = '<span>⚡</span> Mulai Transcoding Paralel';
+                    return;
+                }
+
+                syncGlobalJobState();
             } catch (err) {
                 alert('Kesalahan jaringan: ' + err);
                 submitBtn.disabled = false;
@@ -1117,6 +1147,9 @@ def upload_video():
         for i, c in enumerate(chunks)
     ]
 
+    global ACTIVE_JOB_ID
+    ACTIVE_JOB_ID = video_id
+
     JOBS[video_id] = {
         "video_id": video_id,
         "status": "PROCESSING",
@@ -1137,6 +1170,16 @@ def upload_video():
         "chunks_count": len(chunks),
         "resolution": resolution,
     })
+
+
+@app.route("/api/v1/jobs/active", methods=["GET"])
+def get_active_job():
+    global ACTIVE_JOB_ID
+    if not ACTIVE_JOB_ID or ACTIVE_JOB_ID not in JOBS:
+        return jsonify({"has_job": False}), 200
+    job_data = dict(JOBS[ACTIVE_JOB_ID])
+    job_data.pop("raw_path", None)
+    return jsonify({"has_job": True, "job": job_data}), 200
 
 
 @app.route("/api/v1/videos/<video_id>", methods=["GET"])

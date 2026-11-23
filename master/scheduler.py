@@ -1,6 +1,8 @@
 import os
+import socket
 import sys
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional
 
@@ -79,6 +81,19 @@ class MasterScheduler:
 
         return active_workers
 
+    def _resolve_master_url_for_worker(self, worker_url: str) -> str:
+        try:
+            parsed = urllib.parse.urlparse(worker_url)
+            worker_ip = parsed.hostname
+            if worker_ip and worker_ip not in ("127.0.0.1", "localhost", "::1"):
+                with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                    sock.connect((worker_ip, parsed.port or 80))
+                    my_ip = sock.getsockname()[0]
+                    return f"http://{my_ip}:{MASTER_REST_PORT}"
+        except Exception:
+            pass
+        return f"http://{get_local_ip()}:{MASTER_REST_PORT}"
+
     def _call_worker_rpc_stub(
         self,
         worker_url: str,
@@ -91,8 +106,11 @@ class MasterScheduler:
         chunk_filename: str = "",
         output_filename: str = "",
     ) -> Dict[str, Any]:
-        master_ip = get_local_ip()
-        master_url = f"http://{master_ip}:{MASTER_REST_PORT}"
+        master_url = self._resolve_master_url_for_worker(worker_url)
+        parsed_worker = urllib.parse.urlparse(worker_url)
+        worker_ip = parsed_worker.hostname or ""
+        my_lan_ip = get_local_ip()
+        is_remote = worker_ip not in ("127.0.0.1", "localhost", "::1", my_lan_ip)
 
         payload = {
             "task_id": task_id,
@@ -104,19 +122,33 @@ class MasterScheduler:
             "chunk_filename": chunk_filename,
             "output_filename": output_filename,
             "master_url": master_url,
+            "is_remote": is_remote,
         }
 
         max_retries = 2
+        last_error = "Unknown error"
         for attempt in range(max_retries):
             try:
-                response = requests.post(f"{worker_url}/rpc/transcode", json=payload, timeout=60)
-                if response.status_code == 200:
-                    return response.json()
+                response = requests.post(f"{worker_url}/rpc/transcode", json=payload, timeout=120)
+                try:
+                    res_json = response.json()
+                except Exception:
+                    res_json = None
+
+                if response.status_code == 200 and res_json:
+                    return res_json
+                elif res_json and "error" in res_json:
+                    last_error = res_json["error"]
+                    print(f"[Master Client Stub] Worker {worker_url} reported error: {last_error}")
+                    return {"success": False, "error": last_error}
+                else:
+                    last_error = f"Worker HTTP {response.status_code}"
             except Exception as error:
+                last_error = str(error)
                 print(f"[Master Client Stub] Retry {attempt + 1}/{max_retries} to {worker_url}: {error}")
                 time.sleep(1)
 
-        return {"success": False, "error": f"Worker {worker_url} unreachable after retry"}
+        return {"success": False, "error": f"Worker {worker_url} gagal: {last_error}"}
 
     def dispatch_parallel_transcode(
         self,
@@ -163,6 +195,7 @@ class MasterScheduler:
             })
 
         completed_count = 0
+        last_failure_reason = "No details"
         with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
             future_to_task = {
                 executor.submit(
@@ -186,7 +219,7 @@ class MasterScheduler:
 
                 try:
                     result = future.result()
-                    if result.get("success"):
+                    if result.get("success") and os.path.exists(task["output_path"]):
                         transcoded_chunks[index] = task["output_path"]
                         completed_count += 1
                         finished_worker = result.get("worker_id", task["worker_id"])
@@ -194,7 +227,9 @@ class MasterScheduler:
                             chunk_callback(video_id, index, "DONE", finished_worker)
                         print(f"[Master] [Gather] Chunk {index + 1}/{len(chunks)} done via {finished_worker}")
                     else:
-                        print(f"[Master] Chunk {index} failed on {task['worker_id']}. Attempting failover...")
+                        worker_err = result.get("error") if not result.get("success") else "Berkas chunk hasil tidak ditemukan di Master setelah worker selesai."
+                        last_failure_reason = worker_err
+                        print(f"[Master] Chunk {index} failed on {task['worker_id']} ({worker_err}). Attempting failover...")
                         fallback_workers = [w for w in active_workers if w["url"] != task["worker_url"]]
                         if fallback_workers:
                             fallback = fallback_workers[0]
@@ -212,15 +247,20 @@ class MasterScheduler:
                                 task["chunk_filename"],
                                 task["output_filename"],
                             )
-                            if retry_result.get("success"):
+                            if retry_result.get("success") and os.path.exists(task["output_path"]):
                                 transcoded_chunks[index] = task["output_path"]
                                 completed_count += 1
                                 if chunk_callback:
                                     chunk_callback(video_id, index, "DONE", fallback["worker_id"])
                                 print(f"[Master] [Failover Success] Chunk {index + 1} completed via {retry_result.get('worker_id')}")
                             else:
-                                print(f"[Master] Failover for chunk {index} failed.")
+                                fail_err = retry_result.get("error") if not retry_result.get("success") else "Berkas failover tidak ditemukan di storage Master"
+                                last_failure_reason = fail_err
+                                print(f"[Master] Failover for chunk {index} failed: {fail_err}")
+                        else:
+                            print(f"[Master] Tidak ada worker cadangan untuk failover chunk {index}.")
                 except Exception as error:
+                    last_failure_reason = str(error)
                     print(f"[Master] Exception on chunk {index}: {error}")
 
                 if progress_callback:
@@ -228,7 +268,7 @@ class MasterScheduler:
                     progress_callback(video_id, percentage, completed_count, len(chunks))
 
         if any(chunk is None for chunk in transcoded_chunks):
-            raise RuntimeError("One or more chunks failed to transcode. Unable to assemble video.")
+            raise RuntimeError(f"Gagal memproses video: Sebagian chunk gagal ditranscode. Detail: {last_failure_reason}")
 
         total_time_ms = int((time.time() - start_time) * 1000)
         final_video_path = merge_chunks(video_id, target_resolution, [c for c in transcoded_chunks if c])
