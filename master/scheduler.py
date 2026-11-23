@@ -1,6 +1,8 @@
 import os
+import queue
 import socket
 import sys
+import threading
 import time
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -170,102 +172,120 @@ class MasterScheduler:
         start_time = time.time()
         transcoded_chunks: List[Optional[str]] = [None] * len(chunks)
 
-        tasks = []
+        task_queue: queue.Queue = queue.Queue()
         for index, chunk_path in enumerate(chunks):
-            assigned_worker = active_workers[index % len(active_workers)]
             chunk_filename = os.path.basename(chunk_path)
             output_filename = f"chunk_{index:03d}_{target_resolution}.mp4"
             output_chunk_path = os.path.join(CHUNKS_DIR, video_id, output_filename)
             task_id = f"{video_id}_chunk_{index}_{target_resolution}"
-
-            if chunk_callback:
-                chunk_callback(video_id, index, "DISPATCHED", assigned_worker["worker_id"])
-
-            tasks.append({
+            task_queue.put({
                 "index": index,
-                "worker_url": assigned_worker["url"],
-                "worker_id": assigned_worker["worker_id"],
-                "task_id": task_id,
-                "video_id": video_id,
+                "chunk_path": chunk_path,
                 "chunk_filename": chunk_filename,
                 "output_filename": output_filename,
-                "input_path": chunk_path,
-                "output_path": output_chunk_path,
-                "resolution": target_resolution,
+                "output_chunk_path": output_chunk_path,
+                "task_id": task_id,
             })
 
         completed_count = 0
         last_failure_reason = "No details"
-        with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-            future_to_task = {
-                executor.submit(
-                    self._call_worker_rpc_stub,
-                    task["worker_url"],
-                    task["task_id"],
-                    1,
-                    task["input_path"],
-                    task["output_path"],
-                    task["resolution"],
-                    task["video_id"],
-                    task["chunk_filename"],
-                    task["output_filename"],
-                ): task
-                for task in tasks
-            }
+        lock = threading.Lock()
 
-            for future in as_completed(future_to_task):
-                task = future_to_task[future]
-                index = task["index"]
+        def worker_consumer(worker: Dict[str, Any]):
+            nonlocal completed_count, last_failure_reason
+            worker_id = worker["worker_id"]
+            worker_url = worker["url"]
 
+            while True:
                 try:
-                    result = future.result()
-                    if result.get("success") and os.path.exists(task["output_path"]):
-                        transcoded_chunks[index] = task["output_path"]
+                    task = task_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+                index = task["index"]
+                chunk_path = task["chunk_path"]
+                chunk_filename = task["chunk_filename"]
+                output_filename = task["output_filename"]
+                output_chunk_path = task["output_chunk_path"]
+                task_id = task["task_id"]
+
+                if chunk_callback:
+                    chunk_callback(video_id, index, "DISPATCHED", worker_id)
+
+                result = self._call_worker_rpc_stub(
+                    worker_url=worker_url,
+                    task_id=task_id,
+                    seq_num=1,
+                    input_path=chunk_path,
+                    output_path=output_chunk_path,
+                    resolution=target_resolution,
+                    video_id=video_id,
+                    chunk_filename=chunk_filename,
+                    output_filename=output_filename,
+                )
+
+                success = bool(result.get("success") and os.path.exists(output_chunk_path))
+
+                if not success:
+                    worker_err = result.get("error") if not result.get("success") else "Chunk file not found on Master"
+                    print(f"[Master] Chunk {index} failed on {worker_id} ({worker_err}). Attempting failover...")
+
+                    fallback_workers = [w for w in active_workers if w["url"] != worker_url]
+                    if fallback_workers:
+                        fallback = fallback_workers[0]
+                        if chunk_callback:
+                            chunk_callback(video_id, index, "FAILOVER", fallback["worker_id"])
+                        print(f"[Master] [Failover] Reassigning chunk {index} to {fallback['worker_id']}...")
+                        retry_result = self._call_worker_rpc_stub(
+                            worker_url=fallback["url"],
+                            task_id=task_id,
+                            seq_num=2,
+                            input_path=chunk_path,
+                            output_path=output_chunk_path,
+                            resolution=target_resolution,
+                            video_id=video_id,
+                            chunk_filename=chunk_filename,
+                            output_filename=output_filename,
+                        )
+                        if retry_result.get("success") and os.path.exists(output_chunk_path):
+                            success = True
+                            finished_worker = retry_result.get("worker_id", fallback["worker_id"])
+                            print(f"[Master] [Failover Success] Chunk {index + 1} completed via {finished_worker}")
+                        else:
+                            last_failure_reason = retry_result.get("error", "Failover failed")
+                    else:
+                        last_failure_reason = worker_err
+
+                with lock:
+                    if success:
+                        transcoded_chunks[index] = output_chunk_path
                         completed_count += 1
-                        finished_worker = result.get("worker_id", task["worker_id"])
+                        finished_worker = result.get("worker_id", worker_id)
                         if chunk_callback:
                             chunk_callback(video_id, index, "DONE", finished_worker)
                         print(f"[Master] [Gather] Chunk {index + 1}/{len(chunks)} done via {finished_worker}")
                     else:
-                        worker_err = result.get("error") if not result.get("success") else "Berkas chunk hasil tidak ditemukan di Master setelah worker selesai."
-                        last_failure_reason = worker_err
-                        print(f"[Master] Chunk {index} failed on {task['worker_id']} ({worker_err}). Attempting failover...")
-                        fallback_workers = [w for w in active_workers if w["url"] != task["worker_url"]]
-                        if fallback_workers:
-                            fallback = fallback_workers[0]
-                            if chunk_callback:
-                                chunk_callback(video_id, index, "FAILOVER", fallback["worker_id"])
-                            print(f"[Master] [Failover] Reassigning chunk {index} to {fallback['worker_id']}...")
-                            retry_result = self._call_worker_rpc_stub(
-                                fallback["url"],
-                                task["task_id"],
-                                2,
-                                task["input_path"],
-                                task["output_path"],
-                                task["resolution"],
-                                task["video_id"],
-                                task["chunk_filename"],
-                                task["output_filename"],
-                            )
-                            if retry_result.get("success") and os.path.exists(task["output_path"]):
-                                transcoded_chunks[index] = task["output_path"]
-                                completed_count += 1
-                                if chunk_callback:
-                                    chunk_callback(video_id, index, "DONE", fallback["worker_id"])
-                                print(f"[Master] [Failover Success] Chunk {index + 1} completed via {retry_result.get('worker_id')}")
-                            else:
-                                fail_err = retry_result.get("error") if not retry_result.get("success") else "Berkas failover tidak ditemukan di storage Master"
-                                last_failure_reason = fail_err
-                                print(f"[Master] Failover for chunk {index} failed: {fail_err}")
-                        else:
-                            print(f"[Master] Tidak ada worker cadangan untuk failover chunk {index}.")
-                except Exception as error:
-                    last_failure_reason = str(error)
-                    print(f"[Master] Exception on chunk {index}: {error}")
+                        print(f"[Master] ❌ Chunk {index + 1} gagal diproses.")
 
-                if progress_callback:
-                    percentage = int((completed_count / len(chunks)) * 100)
-                    progress_callback(video_id, percentage, completed_count, len(chunks))
+                    if progress_callback:
+                        percentage = int((completed_count / len(chunks)) * 100)
+                        progress_callback(video_id, percentage, completed_count, len(chunks))
+
+                task_queue.task_done()
+
+        # Jalankan worker consumer threads terkelola (Dynamic Load Balancing)
+        threads = []
+        for worker in active_workers:
+            slots = worker.get("attributes", {}).get("max_concurrent", 2)
+            slots = max(1, min(slots, 3))
+            for _ in range(slots):
+                t = threading.Thread(target=worker_consumer, args=(worker,))
+                t.daemon = True
+                threads.append(t)
+                t.start()
+
+        for t in threads:
+            t.join()
 
         if any(chunk is None for chunk in transcoded_chunks):
             raise RuntimeError(f"Gagal memproses video: Sebagian chunk gagal ditranscode. Detail: {last_failure_reason}")

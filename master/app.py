@@ -4,7 +4,7 @@ import sys
 import threading
 import time
 import uuid
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from flask import Flask, jsonify, render_template_string, request, send_file
 
