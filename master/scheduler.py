@@ -50,9 +50,9 @@ class MasterScheduler:
         seen_instances: Dict[str, int] = {}
         now = time.time()
 
-        # 1. Registered remote workers via dynamic push heartbeats (instant response, zero timeout lag)
+        # 1. Registered remote workers via dynamic push heartbeats (toleransi 30 detik agar tahan jitter Wi-Fi)
         for url, info in list(self.worker_heartbeats.items()):
-            if now - info["last_seen"] <= 15:
+            if now - info["last_seen"] <= 30:
                 worker_data = {
                     "url": info["url"],
                     "worker_id": info["worker_id"],
@@ -62,24 +62,25 @@ class MasterScheduler:
                 seen_instances[info["instance_id"]] = len(active_workers)
                 active_workers.append(worker_data)
 
-        # 2. Local fallback workers (127.0.0.1:5001, 5002) for single-node tests
-        for url in self.worker_urls:
-            try:
-                response = requests.get(f"{url}/health", timeout=0.8)
-                if response.status_code == 200:
-                    payload = response.json()
-                    instance_id = payload.get("instance_id") or url
-                    worker_data = {
-                        "url": url,
-                        "worker_id": payload.get("worker_id"),
-                        "instance_id": instance_id,
-                        "attributes": payload.get("attributes", {}),
-                    }
-                    if instance_id not in seen_instances:
-                        seen_instances[instance_id] = len(active_workers)
-                        active_workers.append(worker_data)
-            except Exception:
-                continue
+        # 2. Local fallback workers (127.0.0.1:5001, 5002) hanya jika tidak ada worker remote terdaftar
+        if not active_workers:
+            for url in self.worker_urls:
+                try:
+                    response = requests.get(f"{url}/health", timeout=0.5)
+                    if response.status_code == 200:
+                        payload = response.json()
+                        instance_id = payload.get("instance_id") or url
+                        worker_data = {
+                            "url": url,
+                            "worker_id": payload.get("worker_id"),
+                            "instance_id": instance_id,
+                            "attributes": payload.get("attributes", {}),
+                        }
+                        if instance_id not in seen_instances:
+                            seen_instances[instance_id] = len(active_workers)
+                            active_workers.append(worker_data)
+                except Exception:
+                    continue
 
         return active_workers
 
@@ -172,20 +173,25 @@ class MasterScheduler:
         start_time = time.time()
         transcoded_chunks: List[Optional[str]] = [None] * len(chunks)
 
-        task_queue: queue.Queue = queue.Queue()
+        # Antrean tugas per worker agar pembagian merata (Round-Robin Fair Distribution)
+        worker_queues: Dict[str, queue.Queue] = {w["url"]: queue.Queue() for w in active_workers}
+
         for index, chunk_path in enumerate(chunks):
             chunk_filename = os.path.basename(chunk_path)
             output_filename = f"chunk_{index:03d}_{target_resolution}.mp4"
             output_chunk_path = os.path.join(CHUNKS_DIR, video_id, output_filename)
             task_id = f"{video_id}_chunk_{index}_{target_resolution}"
-            task_queue.put({
+            task_info = {
                 "index": index,
                 "chunk_path": chunk_path,
                 "chunk_filename": chunk_filename,
                 "output_filename": output_filename,
                 "output_chunk_path": output_chunk_path,
                 "task_id": task_id,
-            })
+            }
+            # Distribusikan secara bergantian ke masing-masing laptop worker (Round-Robin)
+            assigned_worker = active_workers[index % len(active_workers)]
+            worker_queues[assigned_worker["url"]].put(task_info)
 
         completed_count = 0
         last_failure_reason = "No details"
@@ -197,10 +203,22 @@ class MasterScheduler:
             worker_url = worker["url"]
 
             while True:
+                task = None
+                # 1. Ambil dari antrean jatah worker ini sendiri
                 try:
-                    task = task_queue.get_nowait()
+                    task = worker_queues[worker_url].get_nowait()
                 except queue.Empty:
-                    break
+                    # 2. Jika jatah sendiri habis, bantu ambil dari antrean worker lain (Work Stealing)
+                    with lock:
+                        for other_url, other_q in worker_queues.items():
+                            if other_url != worker_url and not other_q.empty():
+                                try:
+                                    task = other_q.get_nowait()
+                                    break
+                                except queue.Empty:
+                                    pass
+                    if not task:
+                        break
 
                 index = task["index"]
                 chunk_path = task["chunk_path"]
@@ -225,6 +243,7 @@ class MasterScheduler:
                 )
 
                 success = bool(result.get("success") and os.path.exists(output_chunk_path))
+                finished_worker = result.get("worker_id", worker_id)
 
                 if not success:
                     worker_err = result.get("error") if not result.get("success") else "Chunk file not found on Master"
@@ -232,7 +251,7 @@ class MasterScheduler:
 
                     fallback_workers = [w for w in active_workers if w["url"] != worker_url]
                     if fallback_workers:
-                        fallback = fallback_workers[0]
+                        fallback = fallback_workers[index % len(fallback_workers)]
                         if chunk_callback:
                             chunk_callback(video_id, index, "FAILOVER", fallback["worker_id"])
                         print(f"[Master] [Failover] Reassigning chunk {index} to {fallback['worker_id']}...")
@@ -260,7 +279,6 @@ class MasterScheduler:
                     if success:
                         transcoded_chunks[index] = output_chunk_path
                         completed_count += 1
-                        finished_worker = result.get("worker_id", worker_id)
                         if chunk_callback:
                             chunk_callback(video_id, index, "DONE", finished_worker)
                         print(f"[Master] [Gather] Chunk {index + 1}/{len(chunks)} done via {finished_worker}")
@@ -270,8 +288,6 @@ class MasterScheduler:
                     if progress_callback:
                         percentage = int((completed_count / len(chunks)) * 100)
                         progress_callback(video_id, percentage, completed_count, len(chunks))
-
-                task_queue.task_done()
 
         # Jalankan worker consumer threads terkelola (Dynamic Load Balancing)
         threads = []
